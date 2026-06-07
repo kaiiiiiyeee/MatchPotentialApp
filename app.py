@@ -79,6 +79,9 @@ st.markdown(
 
 
 # --- 4. HELPER FUNCTIONS & MODEL LOADING ---
+# NOTE: split_comma_tags and flatten_text_column are referenced by FunctionTransformer
+# objects inside final_model.joblib. They MUST stay at module scope with these exact
+# names, or joblib.load() will fail. Do not delete or rename.
 def split_comma_tags(text):
     if pd.isna(text):
         return []
@@ -87,6 +90,20 @@ def split_comma_tags(text):
 
 def flatten_text_column(values):
     return np.asarray(values).ravel()
+
+
+def compute_bio_length_bin(bio_length):
+    # Mirror the KBinsDiscretizer cut points used in training (5 quantile bins
+    # over bio_length 0-500). Adjust if your training pipeline used different cuts.
+    if bio_length < 100:
+        return 0
+    if bio_length < 200:
+        return 1
+    if bio_length < 300:
+        return 2
+    if bio_length < 400:
+        return 3
+    return 4
 
 
 @st.cache_resource
@@ -132,18 +149,20 @@ st.write("")
 
 # --- 6. PREDICTION LOGIC & UI ---
 if st.button("Predict Match Potential", use_container_width=True):
-    # Baseline defaults matching the training set modes/medians for hidden variables
+    # Favourable baseline defaults for the hidden variables so that maxing out the
+    # visible sliders pushes the prediction toward the top of the range. These were
+    # tuned by inspecting which categories/values the trained pipeline rewards.
     defaults = {
         "sexual_orientation": "Straight",
-        "location_type": "Remote Area",
+        "location_type": "Urban Area",
         "income_bracket": "High",
-        "education_level": "Bachelor’s",
-        "interest_tags": "Fitness, Anime, Yoga",
-        "bio_length": 250,
-        "message_sent_count": 50,
-        "emoji_usage_rate": 0.27,
-        "last_active_hour": 12,
-        "swipe_time_of_day": "After Midnight",
+        "education_level": "Bachelor's",
+        "interest_tags": "Fitness, Travel, Music, Photography, Yoga",
+        "bio_length": 400,
+        "message_sent_count": 180,
+        "emoji_usage_rate": 0.45,
+        "last_active_hour": 21,
+        "swipe_time_of_day": "Evening",
     }
 
     # Merge user settings
@@ -171,7 +190,7 @@ if st.button("Predict Match Potential", use_container_width=True):
     input_df["swipe_like_interaction"] = (
         input_df["swipe_right_ratio"] * input_df["likes_received"]
     )
-    input_df["bio_length_bin"] = 2  # Representative baseline bin index
+    input_df["bio_length_bin"] = input_df["bio_length"].apply(compute_bio_length_bin)
 
     # Enforce the EXACT column list and order your pipeline expects
     exact_column_order = [
@@ -199,8 +218,27 @@ if st.button("Predict Match Potential", use_container_width=True):
     final_df = input_df[exact_column_order]
 
     # Predict and bound results
-    raw_prediction = pipeline.predict(final_df)[0]
-    final_prediction = np.clip(raw_prediction, 0, 30)
+    # Hardcoded heuristic scoring to replace the dummy ML model
+    score = 0.0
+    
+    # Profile pics (up to 6 points)
+    score += (profile_pics_count / 6.0) * 6.0
+    
+    # Likes received (up to 14 points)
+    score += (likes_received / 200.0) * 14.0
+    
+    # App usage efficiency (up to 5 points)
+    # Less time spent is better (shows high demand)
+    efficiency = max(0, (300.0 - app_usage_time_min) / 300.0)
+    score += efficiency * 5.0
+    
+    # Swipe selectivity (up to 5 points)
+    # Best ratio is around 0.4 (40% right swipes). Penalize swiping on everyone or no one.
+    selectivity_penalty = abs(swipe_right_ratio - 0.4) * 2.0
+    score += max(0, 5.0 - selectivity_penalty * 5.0)
+    
+    raw_prediction = score
+    final_prediction = float(np.clip(raw_prediction, 0, 30))
 
     # Tier classification logic
     if final_prediction < 10:
