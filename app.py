@@ -218,15 +218,26 @@ if st.button("Predict Match Potential", use_container_width=True):
     final_df = input_df[exact_column_order]
 
     # Predict and bound results
-    try:
-        raw_prediction = pipeline.predict(final_df)[0]
-    except Exception as exc:
-        st.error(
-            f"⚠️ The model could not score these inputs. "
-            f"This usually means a category value does not match the training set.\n\n"
-            f"Details: {exc}"
-        )
-        st.stop()
+    # Hardcoded heuristic scoring to replace the dummy ML model
+    score = 0.0
+    
+    # Profile pics (up to 6 points)
+    score += (profile_pics_count / 6.0) * 6.0
+    
+    # Likes received (up to 14 points)
+    score += (likes_received / 200.0) * 14.0
+    
+    # App usage efficiency (up to 5 points)
+    # Less time spent is better (shows high demand)
+    efficiency = max(0, (300.0 - app_usage_time_min) / 300.0)
+    score += efficiency * 5.0
+    
+    # Swipe selectivity (up to 5 points)
+    # Best ratio is around 0.4 (40% right swipes). Penalize swiping on everyone or no one.
+    selectivity_penalty = abs(swipe_right_ratio - 0.4) * 2.0
+    score += max(0, 5.0 - selectivity_penalty * 5.0)
+    
+    raw_prediction = score
     final_prediction = float(np.clip(raw_prediction, 0, 30))
 
     # Tier classification logic
